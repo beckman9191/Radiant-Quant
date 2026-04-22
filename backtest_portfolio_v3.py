@@ -9,12 +9,37 @@ from data_pipeline.feature_eng import StockDatasetBinary
 from models.lstm_model import LSTMQuantModel
 
 def get_best_checkpoint(checkpoint_dir='checkpoints'):
-    files = glob.glob(os.path.join(checkpoint_dir, "*.pth"))
+    """
+    升级版：优先寻找最新日期文件夹，并在其中挑选 valLoss 最低的模型
+    """
+    # 1. 查找所有形如 YYYY-MM-DD 的日期文件夹
+    date_pattern = os.path.join(checkpoint_dir, "[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]")
+    date_dirs = sorted(glob.glob(date_pattern), reverse=True)
+    
+    if not date_dirs:
+        # 兼容逻辑：如果没有日期文件夹，则在根目录下查找
+        print(f"⚠️ 未发现日期子目录，尝试从 {checkpoint_dir} 根目录查找...")
+        search_path = os.path.join(checkpoint_dir, "*.pth")
+    else:
+        # 锁定最新日期文件夹
+        latest_dir = date_dirs[0]
+        print(f"📅 锁定最新训练日期: {os.path.basename(latest_dir)}")
+        search_path = os.path.join(latest_dir, "*.pth")
+
+    # 2. 查找目标文件夹下的所有模型文件
+    files = glob.glob(search_path)
+    
     if not files:
-        raise FileNotFoundError("❌ checkpoints 文件夹下没有找到任何 .pth 模型文件")
-    files.sort(key=lambda x: float(x.split('valLoss_')[-1].replace('.pth', '')))
+        raise FileNotFoundError(f"❌ 在 {search_path} 路径下没有找到任何 .pth 模型文件")
+
+    # 3. 按照文件名中的 valLoss 数值升序排列 (取最小值)
+    try:
+        files.sort(key=lambda x: float(x.split('valLoss_')[-1].replace('.pth', '')))
+    except (IndexError, ValueError) as e:
+        raise ValueError(f"❌ 模型文件名格式不正确，无法提取 valLoss: {e}")
+
     best_model = files[0]
-    print(f"🏆 自动选择表现最好的模型: {best_model}")
+    print(f"🏆 最终选择模型: {best_model}")
     return best_model
 
 def run_cross_sectional_backtest_v3():

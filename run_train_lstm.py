@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
 import numpy as np
+import datetime
 from sklearn.metrics import classification_report
 
 from data_pipeline.db_engine import get_engine
@@ -68,18 +69,22 @@ def train_model(X_train, ids_train, y_train, X_test, ids_test, y_test, epochs=15
     y_train = y_train.view(-1, 1)
     y_test = y_test.view(-1, 1)
 
-    checkpoint_dir = 'checkpoints'
+    # --- 修改部分：按日期创建文件夹 ---
+    current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+    # 路径变为 checkpoints/2026-04-22
+    checkpoint_dir = os.path.join('checkpoints', current_date)
     os.makedirs(checkpoint_dir, exist_ok=True) 
+    # -------------------------------
     
     best_val_loss = float('inf') 
 
     print(f"\n🚀 开始训练双核 LSTM 模型 (Entity Embeddings 技术)...")
+    print(f"📁 模型将保存至: {checkpoint_dir}")
     
     for epoch in range(epochs):
         # --- 1. 训练阶段 ---
         model.train()
         optimizer.zero_grad()
-        # 【关键 4】：同时喂入盘面特征(X) 和 股票身份(ids)
         outputs = model(X_train, ids_train)
         loss = criterion(outputs, y_train)
         loss.backward()
@@ -93,10 +98,12 @@ def train_model(X_train, ids_train, y_train, X_test, ids_test, y_test, epochs=15
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
-                file_name = f'lstm_epoch_{epoch+1:03d}_valLoss_{val_loss:.4f}.pth'
+                # --- 修改部分：文件名也加入日期前缀 ---
+                file_name = f'lstm_{current_date}_epoch_{epoch+1:03d}_valLoss_{val_loss:.4f}.pth'
+                # -----------------------------------
                 save_path = os.path.join(checkpoint_dir, file_name)
                 torch.save(model.state_dict(), save_path)
-                print(f"🌟 发现新低！Epoch [{epoch+1:3d}] Val Loss: {val_loss:.4f} -> 已保存")
+                print(f"🌟 发现新低！Epoch [{epoch+1:3d}] Val Loss: {val_loss:.4f} -> 已保存至日期目录")
         
         # --- 3. 打印日志 ---
         if (epoch+1) % 10 == 0:
@@ -109,7 +116,7 @@ def train_model(X_train, ids_train, y_train, X_test, ids_test, y_test, epochs=15
                 
             print(f'➡️ Epoch [{epoch+1:3d}/{epochs}] | Train Loss: {loss.item():.4f} | Train Acc: {train_acc.item():.2%} | Test Acc: {test_acc.item():.2%}')
             
-    print(f"\n✅ 炼丹完成！极品模型已存入 checkpoints 文件夹。")
+    print(f"\n✅ 炼丹完成！极品模型已存入 {checkpoint_dir} 文件夹。")
     return model
 
 def evaluate_trading_edge(model, X_test, ids_test, y_test):
