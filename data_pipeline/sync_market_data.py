@@ -61,5 +61,9 @@ def download_and_save_smart(symbols):
 
 if __name__ == "__main__":
     # 你感兴趣的美股清单
-    my_stocks = ['NVDA', 'AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'QQQ']
-    download_and_save_smart(my_stocks)
+    target_stocks = [
+    'nvda', 'aapl', 'msft', 'googl', 'amzn', 'meta', 'tsla',
+    'amd', 'smci', 'arm', 'avgo', 'tsm', 
+    'pltr', 'crwd', 'coin'
+]
+    download_and_save_smart(target_stocks)
