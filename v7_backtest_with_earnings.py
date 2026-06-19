@@ -125,86 +125,68 @@ def run_v7_shield_swing_backtest():
     rank_df = prob_df.rank(axis=1, ascending=False)
     rsi_df = close_df.apply(lambda x: calculate_rsi(x, period=14))
 
-    print("2. 执行 V7: LSTM + RSI做T + QQQ护盾 + 财报避雷针...")
+    print("2. 执行 V7: LSTM + RSI做T + QQQ护盾 + 财报避雷针 (无未来函数版)...")
     
     m_filter_expanded = m_filter.values[:, np.newaxis]
     
-    # 【核心逻辑升级：引入 earnings_blackout_df 拦截】
-    # 入场条件附加：绝对不能在财报静默期买入 (~earnings_blackout_df)
-    entries = (rank_df <= 2) & (prob_df >= 0.50) & m_filter_expanded & (~earnings_blackout_df)
-    
-    # 出场条件附加：如果进入财报静默期，强制触发出场！
-    exits = (rank_df > 3) | (prob_df < 0.45) | (~m_filter_expanded) | earnings_blackout_df
+    # 1. 计算符合所有买入条件的“有效多头池”
+    valid_longs = (rank_df <= 2) & (prob_df >= 0.52) & m_filter_expanded & (~earnings_blackout_df)
 
-    size_df = pd.DataFrame(0.0, index=prob_df.index, columns=prob_df.columns)
+    # 2. 构建目标权重矩阵 (Target Weights)
+    target_weights = pd.DataFrame(0.0, index=prob_df.index, columns=prob_df.columns)
     
-    for date, row in entries.iterrows():
+    for date, row in valid_longs.iterrows():
         active_stocks = row[row == True].index
         if len(active_stocks) == 0: continue
             
-        base_alloc = 0.96 / len(active_stocks) 
+        base_alloc = 0.95 / len(active_stocks) # 留 5% 现金防爆仓
         
         for stock in active_stocks:
-            # 如果某天不小心被标记为要买入，但处于财报期，强制清零（双重保险）
-            if earnings_blackout_df.loc[date, stock]:
-                size_df.loc[date, stock] = 0.0
-                continue
-                
             rsi_val = rsi_df.loc[date, stock]
             if pd.isna(rsi_val):
-                size_df.loc[date, stock] = base_alloc * 0.5
-                continue
-
-            if rsi_val < 35:
-                size_df.loc[date, stock] = base_alloc * 1.0 
+                target_weights.loc[date, stock] = base_alloc * 0.5
+            elif rsi_val < 35:
+                target_weights.loc[date, stock] = base_alloc * 1.0  # 超跌重仓
             elif rsi_val > 75:
-                size_df.loc[date, stock] = base_alloc * 0.3 
+                target_weights.loc[date, stock] = base_alloc * 0.3  # 超买减仓
             else:
-                size_df.loc[date, stock] = base_alloc * 0.6 
+                target_weights.loc[date, stock] = base_alloc * 0.6  # 正常持有
+
+    # 🚨 3. 核心修复：消灭未来函数！所有权重推迟 1 天执行！
+    # 物理意义：T日收盘后算出的目标仓位，T+1日收盘才执行调仓。
+    target_weights = target_weights.shift(1).fillna(0.0)
 
     # ==========================================
-    # ⏳ 新增：时间轴截断（Regime Shift Filtering）
+    # ⏳ 时间轴截断（Regime Shift Filtering）
     # ==========================================
     print("\n✂️ 正在截断时间轴：切除疫情与加息周期，仅保留过去两年...")
-    # 计算两年前的日期
     start_date = pd.Timestamp.now().normalize() - pd.DateOffset(years=2)
-    
-    # 生成时间遮罩 (只保留 start_date 之后的数据)
     time_mask = close_df.index >= start_date
     
-    # 挥下快刀，同步切断所有矩阵
     close_df = close_df[time_mask]
-    entries = entries[time_mask]
-    exits = exits[time_mask]
-    size_df = size_df[time_mask]
-
+    target_weights = target_weights[time_mask]
     print(f"📅 实际回测执行区间: {close_df.index[0].strftime('%Y-%m-%d')} 至 {close_df.index[-1].strftime('%Y-%m-%d')}")
 
     print("3. 启动 Vectorbt 策略对齐回测...")
-    # 注意：在 Vectorbt 中，我们无法简单用纯 Pandas 矩阵模拟“当天止损后第二天拉黑”的动态防洗仓逻辑。
-    # 因为 vbt 的 sl_stop 是在底层 C/Numba 引擎里运算的。
-    # 但由于回测按日运行，且止损后一般需要重新满足 rank<=2 和 prob>=0.5 才会建仓，
-    # 洗仓影响在日线回测中相对实盘极短期的分钟级跳动要小很多，重点在于解决【财报缺口】问题。
-    pf = vbt.Portfolio.from_signals(
+    # 🚨 4. 核心修复：改用 from_orders 引擎
+    # 物理意义：每天比对实际仓位和 target_weights，自动进行买卖(多退少补)，真正激活 RSI 做 T 逻辑。
+    pf = vbt.Portfolio.from_orders(
         close=close_df,
-        entries=entries,
-        exits=exits,
-        size=size_df,              
-        size_type='percent',        
+        size=target_weights,
+        size_type='targetpercent', # 按照目标百分比动态调仓
         cash_sharing=True,          
         init_cash=100000,
         fees=0.001,
-        freq='1D',
-        sl_stop=0.04,  
+        freq='1D'
     )
     
     print("\n" + "="*55)
-    print("📈 V7 终极一致性报告 (财报免疫版)")
-    print(f"🧠 驱动大脑: {model_filename}") # 🆕 在报告头部打印模型名称
+    print("📈 V7 终极一致性报告 (挤干水分版)")
+    print(f"🧠 驱动大脑: {model_filename}") 
     print("="*55)
     print(pf.stats())
     
-    pf.value().vbt.plot(trace_kwargs=dict(name='V7 Perfect Parity 净值曲线')).show()
+    pf.value().vbt.plot(trace_kwargs=dict(name='V7 Honest Backtest')).show()
 
 if __name__ == "__main__":
     run_v7_shield_swing_backtest()

@@ -22,8 +22,8 @@ TARGET_STOCKS = [
 ]
 
 # 策略参数
-PROB_ENTRY_THRESHOLD = 0.50 
-PROB_EXIT_THRESHOLD = 0.45  
+PROB_ENTRY_THRESHOLD = 0.52
+PROB_EXIT_THRESHOLD = 0.50 
 SL_STOP = 0.04              
 EARNINGS_BLACKOUT_DAYS = 2  # 🆕 财报前 2 天内强制清仓/禁止买入
 
@@ -37,22 +37,23 @@ def calculate_rsi(series, period=14):
 class AlpacaBotV7:
     def __init__(self):
         self.api = tradeapi.REST(API_KEY, SECRET_KEY, BASE_URL, api_version='v2')
+        self.checkpoint_path = "checkpoints/2026-04-30/lstm_v15_2026-04-30_epoch_036_valLoss_1.1196.pth"
         self.model = self._load_model()
         
-    def _load_model(self):
-        date_dirs = sorted(glob.glob("checkpoints/[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"), reverse=True)
-        latest_dir = date_dirs[0] if date_dirs else "checkpoints"
-        files = glob.glob(os.path.join(latest_dir, "*.pth"))
-
-        if not files:
-            raise FileNotFoundError("😱 找不到模型文件！")
-
-        best_path = sorted(files, key=lambda x: float(x.split('valLoss_')[-1].replace('.pth', '')))[0]
         
+    def _load_model(self):
+        # 直接验证并加载指定的 checkpoint 路径
+        if not os.path.exists(self.checkpoint_path):
+            raise FileNotFoundError(f"😱 找不到指定的模型文件: {self.checkpoint_path}")
+
+        # 初始化模型结构
         model = LSTMQuantModel(input_dim=6, hidden_dim=64, num_layers=2, num_stocks=15, embed_dim=8)
-        model.load_state_dict(torch.load(best_path))
+        
+        # 加载权重 (加入 map_location='cpu' 是个好习惯，防止在没有 GPU 的推理机器上报错)
+        model.load_state_dict(torch.load(self.checkpoint_path, map_location='cpu'))
         model.eval()
-        print(f"🎯 已自动锁定最新 V7 模型: {best_path}")
+        
+        print(f"🎯 已精确锁定并加载 V7 LSTM 模型: {self.checkpoint_path}")
         return model
 
     def _is_earnings_approaching(self, symbol, days_threshold):
@@ -128,8 +129,19 @@ class AlpacaBotV7:
     def execute_trades(self):
         probs, rsi_dict, is_market_ok = self.get_signals()
         
+        # 🆕 新增：打印所有目标股票的预测概率 (按概率从高到低排序)
+        print("\n📊 LSTM V7 模型实时预测概率 (PROB) 排名:")
+        if probs:
+            sorted_all_probs = pd.Series(probs).sort_values(ascending=False)
+            for sym, p_val in sorted_all_probs.items():
+                # 加个小标记，直观显示谁过了买入线，谁过了持有线
+                marker = "🟢 (可建仓)" if p_val >= PROB_ENTRY_THRESHOLD else ("🟡 (可持有)" if p_val >= PROB_EXIT_THRESHOLD else "⚪ (观望/清仓)")
+                print(f"   - {sym:5s}: {p_val:.4f} {marker}")
+        else:
+            print("   - 无有效概率数据生成。")
+
         if not is_market_ok:
-            print("🚨 大盘护盾触发！清空所有头寸。")
+            print("\n🚨 大盘护盾触发！清空所有头寸。")
             self.api.close_all_positions()
             return
 
@@ -184,7 +196,7 @@ class AlpacaBotV7:
 
         target_quantities = {}
         if len(top_2_stocks) > 0:
-            base_weight = 0.95 / len(top_2_stocks)
+            base_weight = 0.45
             
             for symbol, prob in top_2_stocks.items():
                 # 🆕 D. 买入拦截器
@@ -196,9 +208,16 @@ class AlpacaBotV7:
                     continue
                 
                 current_rsi = rsi_dict.get(symbol, 50.0)
-                if current_rsi < 35: multiplier = 1.0 
-                elif current_rsi > 75: multiplier = 0.3
-                else: multiplier = 0.6 
+                
+                # 🚀 优化版 RSI 乘数逻辑：适合高波动 AI 龙头股
+                if current_rsi < 40: 
+                    multiplier = 1.0     # [超跌区]：稍微放宽抄底线，吃满配额
+                elif current_rsi >= 80: 
+                    multiplier = 0.3     # [极度疯狂区]：真的涨上天了，才大幅度止盈
+                elif current_rsi >= 72: 
+                    multiplier = 0.7     # [高位缓冲区]：刚进入超买区，稍微降降温，防横跳
+                else: 
+                    multiplier = 1.0     # [常态主升浪区 40~72]：既然概率排进前二，就拿满仓位！(原为 0.6)
                 
                 target_value = equity * (base_weight * multiplier)
                 price = self.api.get_latest_trade(symbol).price

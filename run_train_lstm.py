@@ -9,7 +9,7 @@ from sklearn.metrics import classification_report
 
 from data_pipeline.db_engine import get_engine
 from data_pipeline.feature_eng import StockDatasetBinary
-from models.lstm_model import LSTMQuantModel
+from models.lstm_model_7 import LSTMQuantModel
 
 def load_and_split_multi_stock_data():
     engine = get_engine()

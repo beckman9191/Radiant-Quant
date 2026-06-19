@@ -1,22 +1,22 @@
-# 敏感配置文件
-.env
+# # 敏感配置文件
+# .env
 
-# Python 缓存
-__pycache__/
-*.py[cod]
-*$py.class
+# # Python 缓存
+# __pycache__/
+# *.py[cod]
+# *$py.class
 
-# 数据库文件
-*.db
-*.sqlite3
+# # 数据库文件
+# *.db
+# *.sqlite3
 
-# 模型权重与日志
-checkpoints/
-*.pth
-trade_log.txt
+# # 模型权重与日志
+# checkpoints/
+# *.pth
+# trade_log.txt
 
-# 开发环境配置
-.vscode/
-.idea/
-venv/
-.python-version
+# # 开发环境配置
+# .vscode/
+# .idea/
+# venv/
+# .python-version
